@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>各階段工期比較分析 (階段篩選)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        #modalContent {
+            max-height: none !important;
+            overflow-y: visible !important;
+        }
+        #detailModal .bg-white {
+            max-width: 600px;
+            width: 100%;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 6px 0;
+        }
+        .detail-label {
+            font-weight: 600;
+            color: #4b5563;
+            padding-right: 24px;
+            flex-shrink: 0;
+            min-width: 110px;
+            text-align: left;
+        }
+        .detail-value {
+            color: #111827;
+            text-align: right;
+            word-break: break-word;
+            flex: 1;
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        @media (max-width: 480px) {
+            .detail-label {
+                min-width: 70px;
+                padding-right: 12px;
+                font-size: 14px;
+            }
+            .detail-value {
+                font-size: 14px;
+            }
+        }
+        #undergroundContainer {
+            display: flex !important;
+        }
+        #undergroundContainer.hidden {
+            display: none !important;
+        }
+        select {
+            min-width: 60px;
+        }
+        .chart-type-select, .stage-filter-select {
+            border: 1px solid #d1d5db;
+            padding: 6px 12px;
+            border-radius: 6px;
+            background-color: white;
+            font-size: 14px;
+            color: #374151;
+            cursor: pointer;
+        }
+        .chart-type-select:focus, .stage-filter-select:focus {
+            outline: none;
+            ring: 2px solid #6366f1;
+        }
+        .export-btn {
+            background-color: #10b981;
+            color: white;
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: none;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .export-btn:hover {
+            background-color: #059669;
+        }
+        .export-btn:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-4 md:p-8">
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">各階段工期比較分析</h1>
+            <p class="text-gray-600">提示：在圖表柱狀上「雙擊」即可查看完整專案細節</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-xl shadow-sm border mb-8 flex flex-wrap gap-4 items-center">
+            <input type="file" id="excelFile" accept=".xlsx, .xls" class="block text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-indigo-600 file:text-white cursor-pointer">
+            
+            <select id="filterConstruction" class="border p-2 rounded hidden"><option value="all">所有構造</option></select>
+            
+            <div class="flex items-center gap-2 border p-2 rounded hidden" id="yearRangeContainer">
+                <span class="text-sm text-gray-600">完工:</span>
+                <select id="startYear" class="border p-1 rounded"></select>
+                <span>至</span>
+                <select id="endYear" class="border p-1 rounded"></select>
+            </div>
+
+            <div class="flex items-center gap-2 border p-2 rounded" id="undergroundContainer">
+                <span class="text-sm text-gray-600" id="undergroundLabel">地下樓層:</span>
+                <select id="filterUnderground" class="border p-1 rounded">
+                    <option value="all">全部</option>
+                </select>
+            </div>
+
+            <div class="flex items-center gap-2 border p-2 rounded hidden" id="abovegroundContainer">
+                <span class="text-sm text-gray-600" id="abovegroundLabel">地上樓層:</span>
+                <select id="startAboveground" class="border p-1 rounded"></select>
+                <span>至</span>
+                <select id="endAboveground" class="border p-1 rounded"></select>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <span class="text-sm text-gray-600">階段篩選:</span>
+                <select id="stageFilterSelect" class="stage-filter-select">
+                    <option value="all">全部階段</option>
+                </select>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <span class="text-sm text-gray-600">圖表類型:</span>
+                <select id="chartTypeSelect" class="chart-type-select">
+                    <option value="grouped">分組長條圖</option>
+                    <option value="stacked">堆積長條圖 (X軸=案別)</option>
+                </select>
+            </div>
+
+            <button id="exportBtn" class="export-btn" disabled>📊 匯出XLSX</button>
+        </div>
+
+        <div id="dashboard" class="hidden">
+            <div class="bg-white p-6 rounded-xl shadow-sm border">
+                <canvas id="projectChart" height="80"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <h2 id="modalTitle" class="text-xl font-bold mb-4 text-gray-800">案別詳情</h2>
+            <div id="modalContent" class="space-y-1 text-gray-700"></div>
+            <button onclick="document.getElementById('detailModal').classList.add('hidden')" class="mt-6 w-full bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700 transition">關閉</button>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const TARGET_STAGES = ["PC-1F", "1F-上梁", "上梁-拆架", "拆架-使照申請", "使照申請-核准"];
+            let rawData = [];
+            let undergroundField = null;
+            let abovegroundField = null;
+            let currentChartType = 'grouped';
+            let currentFilteredData = [];
+
+            const fileInput = document.getElementById('excelFile');
+            const filterConstruction = document.getElementById('filterConstruction');
+            const startYearEl = document.getElementById('startYear');
+            const endYearEl = document.getElementById('endYear');
+            const yearRangeContainer = document.getElementById('yearRangeContainer');
+            
+            const filterUndergroundEl = document.getElementById('filterUnderground');
+            const undergroundContainer = document.getElementById('undergroundContainer');
+            const undergroundLabel = document.getElementById('undergroundLabel');
+            
+            const startAbovegroundEl = document.getElementById('startAboveground');
+            const endAbovegroundEl = document.getElementById('endAboveground');
+            const abovegroundContainer = document.getElementById('abovegroundContainer');
+            const abovegroundLabel = document.getElementById('abovegroundLabel');
+
+            const chartTypeSelect = document.getElementById('chartTypeSelect');
+            const exportBtn = document.getElementById('exportBtn');
+            const stageFilterSelect = document.getElementById('stageFilterSelect');
+
+            const dashboard = document.getElementById('dashboard');
+            const modal = document.getElementById('detailModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalContent = document.getElementById('modalContent');
+
+            let myChart = null;
+
+            function safeParseFloat(val) {
+                if (val === undefined || val === null || val === '') return 0;
+                const num = parseFloat(val);
+                return isNaN(num) ? 0 : num;
+            }
+
+            function safeParseInt(val) {
+                if (val === undefined || val === null || val === '') return NaN;
+                const num = parseInt(val, 10);
+                return isNaN(num) ? NaN : num;
+            }
+
+            window.showDetail = function(data) {
+                if (!data) return;
+                modalTitle.innerText = '案別詳情：' + (data['案別'] || '未知');
+                const keys = Object.keys(data);
+                let html = '';
+                keys.forEach(k => {
+                    let value = data[k];
+                    if (value === undefined || value === null) value = '';
+                    html += `
+                        <div class="detail-row">
+                            <span class="detail-label">${k}</span>
+                            <span class="detail-value">${value}</span>
+                        </div>
+                    `;
+                });
+                modalContent.innerHTML = html;
+                modal.classList.remove('hidden');
+            };
+
+            modal.addEventListener('click', function(e) {
+                if (e.target === this) {
+                    this.classList.add('hidden');
+                }
+            });
+
+            function detectFloorFields(headerRow) {
+                const headerLower = headerRow.map(h => String(h).toLowerCase().trim());
+                
+                const undergroundIdx = headerLower.findIndex(h => 
+                    h.includes('地下') || h.includes('地下一') || h.includes('地下層') || 
+                    h === 'b1' || h === 'b2' || h === 'b3' || h === 'b4'
+                );
+                const abovegroundIdx = headerLower.findIndex(h => 
+                    h.includes('地上') || h.includes('地上層') || 
+                    h.includes('above') || h.includes('floor') || h.includes('樓層')
+                );
+
+                let undergroundFieldName = null;
+                let abovegroundFieldName = null;
+
+                if (undergroundIdx !== -1) {
+                    undergroundFieldName = headerRow[undergroundIdx];
+                } else {
+                    const altIdx = headerLower.findIndex(h => h.includes('地下') || h.includes('下層') || h.includes('地下室'));
+                    if (altIdx !== -1) undergroundFieldName = headerRow[altIdx];
+                }
+
+                if (abovegroundIdx !== -1) {
+                    abovegroundFieldName = headerRow[abovegroundIdx];
+                } else {
+                    const altIdx = headerLower.findIndex(h => h.includes('地上') || h.includes('上層') || h.includes('樓層'));
+                    if (altIdx !== -1 && headerLower[altIdx] !== undergroundFieldName?.toLowerCase()) {
+                        abovegroundFieldName = headerRow[altIdx];
+                    }
+                }
+
+                if (undergroundFieldName && abovegroundFieldName && undergroundFieldName === abovegroundFieldName) {
+                    abovegroundFieldName = undergroundFieldName;
+                    undergroundFieldName = null;
+                }
+
+                return { underground: undergroundFieldName, aboveground: abovegroundFieldName };
+            }
+
+            function getUniqueUndergroundValues() {
+                const values = new Set();
+                if (!undergroundField) return values;
+                rawData.forEach(d => {
+                    const val = safeParseInt(d[undergroundField]);
+                    if (!isNaN(val)) {
+                        values.add(val);
+                    }
+                });
+                return values;
+            }
+
+            function formatUndergroundLabel(val) {
+                if (val < 0) {
+                    return `B${Math.abs(val)}F`;
+                } else {
+                    return `${val}F`;
+                }
+            }
+
+            function exportToExcel() {
+                if (currentFilteredData.length === 0) {
+                    alert('沒有資料可以匯出，請先上傳並篩選資料。');
+                    return;
+                }
+
+                try {
+                    const exportData = currentFilteredData.map(item => {
+                        const row = {};
+                        Object.keys(item).forEach(key => {
+                            row[key] = item[key];
+                        });
+                        return row;
+                    });
+
+                    const wb = XLSX.utils.book_new();
+                    const ws = XLSX.utils.json_to_sheet(exportData);
+                    XLSX.utils.book_append_sheet(wb, ws, '工期資料');
+                    
+                    const fileName = `工期分析_${new Date().toISOString().slice(0,10)}.xlsx`;
+                    XLSX.writeFile(wb, fileName);
+                } catch (err) {
+                    alert('匯出失敗: ' + err.message);
+                    console.error(err);
+                }
+            }
+
+            function updateChart() {
+                const con = filterConstruction.value;
+                const startYear = parseInt(startYearEl.value, 10);
+                const endYear = parseInt(endYearEl.value, 10);
+                
+                const selectedUnderground = filterUndergroundEl.value;
+                const startAboveground = parseInt(startAbovegroundEl.value, 10);
+                const endAboveground = parseInt(endAbovegroundEl.value, 10);
+                const selectedStage = stageFilterSelect.value;
+
+                const filtered = rawData.filter(d => {
+                    const year = parseInt(d['完工年'], 10);
+                    const conMatch = (con === 'all' || d['構造'] === con);
+                    const yearMatch = (isNaN(year) || (year >= startYear && year <= endYear));
+                    
+                    let undergroundMatch = true;
+                    if (undergroundField && undergroundField in d && selectedUnderground !== 'all') {
+                        const val = safeParseInt(d[undergroundField]);
+                        undergroundMatch = (!isNaN(val) && val === parseInt(selectedUnderground, 10));
+                    }
+                    
+                    let abovegroundMatch = true;
+                    if (abovegroundField && abovegroundField in d) {
+                        const val = safeParseInt(d[abovegroundField]);
+                        abovegroundMatch = (isNaN(val) || (val >= startAboveground && val <= endAboveground));
+                    }
+                    
+                    return conMatch && yearMatch && undergroundMatch && abovegroundMatch;
+                });
+
+                currentFilteredData = filtered;
+                exportBtn.disabled = (filtered.length === 0);
+
+                if (filtered.length === 0) {
+                    dashboard.classList.add('hidden');
+                    if (myChart) {
+                        myChart.destroy();
+                        myChart = null;
+                    }
+                    return;
+                }
+
+                dashboard.classList.remove('hidden');
+                const ctx = document.getElementById('projectChart').getContext('2d');
+
+                if (myChart) {
+                    myChart.destroy();
+                    myChart = null;
+                }
+
+                const isStacked = (currentChartType === 'stacked');
+
+                // 決定要顯示的階段
+                let displayStages = TARGET_STAGES;
+                const isSingleStage = (selectedStage !== 'all');
+                if (isSingleStage) {
+                    displayStages = [selectedStage];
+                }
+
+                // 計算各階段平均 (針對所有階段計算，用於顯示平均線)
+                const allStageAverages = TARGET_STAGES.map(stage => {
+                    let sum = 0, count = 0;
+                    filtered.forEach(item => {
+                        const val = safeParseFloat(item[stage]);
+                        if (val > 0) {
+                            sum += val;
+                            count++;
+                        }
+                    });
+                    return count > 0 ? sum / count : 0;
+                });
+
+                // 針對單一階段的平均 (若選擇單一階段)
+                let singleStageAvg = null;
+                if (isSingleStage) {
+                    const idx = TARGET_STAGES.indexOf(selectedStage);
+                    if (idx !== -1) {
+                        singleStageAvg = allStageAverages[idx];
+                    }
+                }
+
+                let datasets = [];
+                let labels = [];
+
+                if (isStacked) {
+                    // 堆積長條圖：X軸 = 案別
+                    const projectNames = filtered.map(item => item['案別'] || '未知');
+                    labels = projectNames;
+
+                    displayStages.forEach((stage, stageIndex) => {
+                        const stageData = filtered.map(item => safeParseFloat(item[stage]));
+                        const hue = (stageIndex * 60 + 200) % 360;
+                        datasets.push({
+                            label: stage,
+                            data: stageData,
+                            backgroundColor: `hsla(${hue}, 70%, 50%, 0.8)`,
+                            borderColor: `hsla(${hue}, 70%, 40%, 1)`,
+                            borderWidth: 1,
+                        });
+                    });
+                } else {
+                    // 分組長條圖
+                    if (isSingleStage) {
+                        // 單一階段：X軸顯示案別，每個案別一個長條
+                        const projectNames = filtered.map(item => item['案別'] || '未知');
+                        labels = projectNames;
+                        
+                        // 建立一個 dataset，包含所有專案在該階段的數據
+                        // 這樣每個專案會顯示為一個長條，且顏色一致
+                        const stageData = filtered.map(item => safeParseFloat(item[selectedStage]));
+                        // 使用固定顏色，讓圖表更清晰
+                        const baseHue = 210; // 藍色系
+                        datasets = [{
+                            label: selectedStage,
+                            data: stageData,
+                            backgroundColor: `hsla(${baseHue}, 70%, 50%, 0.8)`,
+                            borderColor: `hsla(${baseHue}, 70%, 40%, 1)`,
+                            borderWidth: 1,
+                        }];
+                    } else {
+                        // 全部階段：X軸 = 階段
+                        labels = displayStages;
+                        datasets = filtered.map((item, index) => {
+                            const stageValues = displayStages.map(stage => safeParseFloat(item[stage]));
+                            const hue = (index * 60 + 200) % 360;
+                            return {
+                                label: item['案別'] || `專案${index+1}`,
+                                data: stageValues,
+                                backgroundColor: `hsla(${hue}, 70%, 50%, 0.8)`,
+                                borderColor: `hsla(${hue}, 70%, 40%, 1)`,
+                                borderWidth: 1,
+                            };
+                        });
+                    }
+                }
+
+                myChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: datasets
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: {
+                                position: 'top',
+                                labels: {
+                                    boxWidth: 12,
+                                    padding: 12,
+                                    font: { size: 11 }
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        let val = context.parsed.y;
+                                        return label + ': ' + (Number.isFinite(val) ? val : 0) + ' 天';
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                stacked: isStacked,
+                                title: {
+                                    display: true,
+                                    text: isStacked ? '案別' : (isSingleStage ? '案別' : '階段')
+                                }
+                            },
+                            y: {
+                                stacked: isStacked,
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: '工期 (天)'
+                                }
+                            }
+                        },
+                        animation: {
+                            onComplete: function() {
+                                // 分組模式下繪製平均線
+                                if (!isStacked) {
+                                    if (isSingleStage && singleStageAvg !== null && singleStageAvg > 0) {
+                                        drawSingleStageAverageLine(this, singleStageAvg);
+                                    } else if (!isSingleStage) {
+                                        drawAllStageAverageLines(this, allStageAverages);
+                                    }
+                                }
+                            },
+                            onProgress: function() {
+                                if (!isStacked) {
+                                    if (isSingleStage && singleStageAvg !== null && singleStageAvg > 0) {
+                                        drawSingleStageAverageLine(this, singleStageAvg);
+                                    } else if (!isSingleStage) {
+                                        drawAllStageAverageLines(this, allStageAverages);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // ---- 繪製單一階段的平均線 (橫跨整個圖表) ----
+                function drawSingleStageAverageLine(chartInstance, avgValue) {
+                    const chart = chartInstance;
+                    const ctx = chart.ctx;
+                    const yScale = chart.scales.y;
+                    
+                    if (!yScale) return;
+
+                    ctx.save();
+                    
+                    ctx.strokeStyle = '#B22222';
+                    ctx.lineWidth = 2.5;
+                    ctx.setLineDash([6, 4]);
+
+                    const chartArea = chart.chartArea;
+                    const left = chartArea.left;
+                    const right = chartArea.right;
+                    
+                    const yPos = yScale.getPixelForValue(avgValue);
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(left, yPos);
+                    ctx.lineTo(right, yPos);
+                    ctx.stroke();
+
+                    // 顯示平均數值標籤
+                    ctx.fillStyle = '#8B0000';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'bottom';
+                    const label = `平均: ${avgValue.toFixed(1)}天`;
+                    ctx.fillText(label, right - 140, yPos - 2);
+
+                    ctx.restore();
+                }
+
+                // ---- 繪製全部階段的平均線 ----
+                function drawAllStageAverageLines(chartInstance, averages) {
+                    const chart = chartInstance;
+                    const ctx = chart.ctx;
+                    const yScale = chart.scales.y;
+                    const xScale = chart.scales.x;
+                    
+                    if (!yScale || !xScale) return;
+
+                    ctx.save();
+                    
+                    ctx.strokeStyle = '#B22222';
+                    ctx.lineWidth = 2.5;
+                    ctx.setLineDash([6, 4]);
+
+                    const meta = chart.getDatasetMeta(0);
+                    if (!meta || !meta.data || meta.data.length === 0) {
+                        ctx.restore();
+                        return;
+                    }
+
+                    const xCenters = meta.data.map((bar) => bar.x);
+
+                    xCenters.forEach((x, index) => {
+                        const avgValue = averages[index];
+                        if (avgValue === 0) return;
+                        const yPos = yScale.getPixelForValue(avgValue);
+                        const barWidth = meta.data[index]?.width || 20;
+                        const left = x - barWidth / 2 - 5;
+                        const right = x + barWidth / 2 + 5;
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(left, yPos);
+                        ctx.lineTo(right, yPos);
+                        ctx.stroke();
+
+                        ctx.fillStyle = '#8B0000';
+                        ctx.font = 'bold 14px Arial';
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'bottom';
+                        const label = `平均: ${avgValue.toFixed(1)}天`;
+                        ctx.fillText(label, right + 4, yPos - 2);
+                    });
+
+                    ctx.restore();
+                }
+
+                const canvas = document.getElementById('projectChart');
+                canvas.removeEventListener('dblclick', handleDblClick);
+                canvas.addEventListener('dblclick', handleDblClick);
+
+                function handleDblClick(e) {
+                    if (!myChart) return;
+                    const elements = myChart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, false);
+                    if (elements && elements.length > 0) {
+                        const datasetIndex = elements[0].datasetIndex;
+                        let dataItem = null;
+                        if (isStacked) {
+                            const xIndex = elements[0].index;
+                            if (xIndex !== undefined && xIndex < filtered.length) {
+                                dataItem = filtered[xIndex];
+                            }
+                        } else {
+                            // 分組模式下，單一階段時只有一個 dataset，透過 xIndex 取得專案
+                            if (isSingleStage) {
+                                const xIndex = elements[0].index;
+                                if (xIndex !== undefined && xIndex < filtered.length) {
+                                    dataItem = filtered[xIndex];
+                                }
+                            } else {
+                                if (datasetIndex !== undefined && datasetIndex < filtered.length) {
+                                    dataItem = filtered[datasetIndex];
+                                }
+                            }
+                        }
+                        if (dataItem) {
+                            window.showDetail(dataItem);
+                        }
+                    }
+                }
+            }
+
+            function initFilters() {
+                const consSet = new Set();
+                rawData.forEach(d => {
+                    if (d['構造'] && d['構造'].trim() !== '') {
+                        consSet.add(d['構造']);
+                    }
+                });
+                const cons = Array.from(consSet);
+                filterConstruction.innerHTML = '<option value="all">所有構造</option>';
+                cons.forEach(val => {
+                    const opt = document.createElement('option');
+                    opt.value = val;
+                    opt.textContent = val;
+                    filterConstruction.appendChild(opt);
+                });
+                filterConstruction.classList.remove('hidden');
+
+                const yearSet = new Set();
+                rawData.forEach(d => {
+                    const y = parseInt(d['完工年'], 10);
+                    if (!isNaN(y)) {
+                        yearSet.add(y);
+                    }
+                });
+                const years = Array.from(yearSet).sort((a, b) => a - b);
+                if (years.length > 0) {
+                    yearRangeContainer.classList.remove('hidden');
+                    startYearEl.innerHTML = '';
+                    endYearEl.innerHTML = '';
+                    years.forEach(y => {
+                        const opt1 = document.createElement('option');
+                        opt1.value = y;
+                        opt1.textContent = y;
+                        startYearEl.appendChild(opt1);
+                        const opt2 = document.createElement('option');
+                        opt2.value = y;
+                        opt2.textContent = y;
+                        endYearEl.appendChild(opt2);
+                    });
+                    startYearEl.value = years[0];
+                    endYearEl.value = years[years.length - 1];
+                } else {
+                    yearRangeContainer.classList.add('hidden');
+                }
+
+                if (rawData.length > 0) {
+                    const headerRow = Object.keys(rawData[0]);
+                    const detected = detectFloorFields(headerRow);
+                    undergroundField = detected.underground;
+                    abovegroundField = detected.aboveground;
+                    
+                    if (undergroundField) {
+                        undergroundLabel.textContent = undergroundField + ':';
+                    } else {
+                        undergroundLabel.textContent = '地下樓層:';
+                    }
+                    if (abovegroundField) {
+                        abovegroundLabel.textContent = abovegroundField + ':';
+                    } else {
+                        abovegroundLabel.textContent = '地上樓層:';
+                    }
+                }
+
+                filterUndergroundEl.innerHTML = '';
+                const allOption = document.createElement('option');
+                allOption.value = 'all';
+                allOption.textContent = '全部';
+                filterUndergroundEl.appendChild(allOption);
+
+                const uniqueValues = getUniqueUndergroundValues();
+                const sortedValues = Array.from(uniqueValues).sort((a, b) => a - b);
+                if (sortedValues.length > 0) {
+                    sortedValues.forEach(val => {
+                        const opt = document.createElement('option');
+                        opt.value = val;
+                        opt.textContent = formatUndergroundLabel(val);
+                        filterUndergroundEl.appendChild(opt);
+                    });
+                    undergroundContainer.classList.remove('hidden');
+                } else {
+                    undergroundContainer.classList.remove('hidden');
+                }
+
+                const abovegroundSet = new Set();
+                if (abovegroundField) {
+                    rawData.forEach(d => {
+                        const val = safeParseInt(d[abovegroundField]);
+                        if (!isNaN(val)) {
+                            abovegroundSet.add(val);
+                        }
+                    });
+                }
+                const abovegrounds = Array.from(abovegroundSet).sort((a, b) => a - b);
+                if (abovegrounds.length > 0) {
+                    abovegroundContainer.classList.remove('hidden');
+                    startAbovegroundEl.innerHTML = '';
+                    endAbovegroundEl.innerHTML = '';
+                    abovegrounds.forEach(val => {
+                        const opt1 = document.createElement('option');
+                        opt1.value = val;
+                        opt1.textContent = val;
+                        startAbovegroundEl.appendChild(opt1);
+                        const opt2 = document.createElement('option');
+                        opt2.value = val;
+                        opt2.textContent = val;
+                        endAbovegroundEl.appendChild(opt2);
+                    });
+                    startAbovegroundEl.value = abovegrounds[0];
+                    endAbovegroundEl.value = abovegrounds[abovegrounds.length - 1];
+                } else {
+                    abovegroundContainer.classList.add('hidden');
+                }
+
+                stageFilterSelect.innerHTML = '';
+                const allStageOption = document.createElement('option');
+                allStageOption.value = 'all';
+                allStageOption.textContent = '全部階段';
+                stageFilterSelect.appendChild(allStageOption);
+                
+                TARGET_STAGES.forEach(stage => {
+                    const opt = document.createElement('option');
+                    opt.value = stage;
+                    opt.textContent = stage;
+                    stageFilterSelect.appendChild(opt);
+                });
+            }
+
+            fileInput.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = function(loadEvent) {
+                    try {
+                        const data = new Uint8Array(loadEvent.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                        rawData = XLSX.utils.sheet_to_json(firstSheet, { raw: false, defval: '' });
+                        
+                        if (!rawData || rawData.length === 0) {
+                            alert('讀取不到資料，請確認 Excel 內容。');
+                            return;
+                        }
+
+                        initFilters();
+                        updateChart();
+                    } catch (err) {
+                        alert('解析 Excel 失敗: ' + err.message);
+                        console.error(err);
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            });
+
+            exportBtn.addEventListener('click', exportToExcel);
+
+            filterConstruction.addEventListener('change', updateChart);
+            startYearEl.addEventListener('change', updateChart);
+            endYearEl.addEventListener('change', updateChart);
+            filterUndergroundEl.addEventListener('change', updateChart);
+            startAbovegroundEl.addEventListener('change', updateChart);
+            endAbovegroundEl.addEventListener('change', updateChart);
+            stageFilterSelect.addEventListener('change', updateChart);
+            
+            chartTypeSelect.addEventListener('change', function() {
+                currentChartType = this.value;
+                updateChart();
+            });
+
+            console.log('請上傳 Excel 檔案。系統將自動判別「地下樓層」與「地上樓層」欄位。');
+            console.log('階段篩選可選擇「全部階段」或單一特定階段。單一階段時，X軸顯示案別，並顯示平均線。');
+        })();
+    </script>
+</body>
+</html>
